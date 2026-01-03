@@ -159,7 +159,10 @@ function network.broadcast(msgType, data, port)
         network.modem.broadcast(port, serialized)
     end
     
-    core.debug("Broadcast [%s] on port %d", msgType, port)
+    -- Don't spam debug log with heartbeats
+    if msgType ~= "heartbeat" then
+        core.debug("Broadcast [%s] on port %d", msgType, port)
+    end
     return true
 end
 

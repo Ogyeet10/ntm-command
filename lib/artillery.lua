@@ -169,20 +169,35 @@ function artillery.setTarget(name, x, y, z)
         end
     end
     
+    -- Check targeting settings
+    local targeting = {battery.proxy.getTargeting()}
+    core.debug("Battery '%s' targeting settings - players: %s, animals: %s, mobs: %s, machines: %s",
+               name, tostring(targeting[1]), tostring(targeting[2]), 
+               tostring(targeting[3]), tostring(targeting[4]))
+    
+    -- Check target distance
+    local distance = battery.proxy.getTargetDistance()
+    core.debug("Battery '%s' target distance: %s", name, tostring(distance))
+    
     -- Verify target was accepted
     local hasTarget = battery.proxy.hasTarget()
     core.debug("Battery '%s' hasTarget after addCoords: %s", name, tostring(hasTarget))
     
-    if not hasTarget then
-        core.warn("Battery '%s' did not accept target!", name)
-        return false
-    end
-    
-    -- Check current target
+    -- Even if hasTarget is false, let's check getCurrentTarget anyway
     local currentTarget = {battery.proxy.getCurrentTarget()}
     if #currentTarget >= 3 then
-        core.debug("Battery '%s' current target: %d, %d, %d", 
+        core.debug("Battery '%s' getCurrentTarget: %d, %d, %d", 
                    name, currentTarget[1], currentTarget[2], currentTarget[3])
+    else
+        core.debug("Battery '%s' getCurrentTarget returned no data", name)
+    end
+    
+    if not hasTarget then
+        core.warn("Battery '%s' did not accept target! This may indicate:", name)
+        core.warn("  - No ammo loaded in turret")
+        core.warn("  - Target is out of range")
+        core.warn("  - Turret is obstructed")
+        -- Don't return false - let it continue so we can see more info
     end
     
     -- Wait briefly and check alignment
@@ -196,8 +211,9 @@ function artillery.setTarget(name, x, y, z)
         core.info("Battery '%s' is aligning to target...", name)
     end
     
-    core.info("Target set for '%s': %d, %d, %d (aligned: %s)", name, x, y, z, tostring(aligned))
-    return true
+    core.info("Target set for '%s': %d, %d, %d (aligned: %s, hasTarget: %s)", 
+              name, x, y, z, tostring(aligned), tostring(hasTarget))
+    return hasTarget
 end
 
 --- Gets distance to current target
