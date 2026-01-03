@@ -77,6 +77,48 @@ end
 local y = 64  -- Default ground level
 
 -- ============================================================================
+-- HELPER FUNCTIONS
+-- ============================================================================
+
+local function log(msg, ...)
+    print(string.format("[DEBUG] " .. msg, ...))
+end
+
+local function checkAndActivate(arty, index)
+    -- Check if turret is active
+    local isActive = arty.isActive()
+    log("Battery %d: isActive = %s", index, tostring(isActive))
+    
+    if not isActive then
+        log("Battery %d: Activating turret...", index)
+        arty.setActive(true)
+        os.sleep(0.1)
+        
+        -- Verify activation
+        isActive = arty.isActive()
+        log("Battery %d: isActive after activation = %s", index, tostring(isActive))
+        
+        if not isActive then
+            print(string.format("  Battery %d: FAILED TO ACTIVATE!", index))
+            return false
+        end
+    end
+    return true
+end
+
+local function logTurretState(arty, index, label)
+    local angle = {arty.getAngle()}
+    local hasTarget = arty.hasTarget()
+    local aligned = arty.isAligned()
+    local energy = {arty.getEnergyInfo()}
+    
+    log("Battery %d [%s]:", index, label)
+    log("  - Pitch: %.2f, Yaw: %.2f", angle[1] or 0, angle[2] or 0)
+    log("  - hasTarget: %s, isAligned: %s", tostring(hasTarget), tostring(aligned))
+    log("  - Energy: %d / %d", energy[1] or 0, energy[2] or 0)
+end
+
+-- ============================================================================
 -- FIRE
 -- ============================================================================
 
@@ -91,14 +133,56 @@ for v = 1, volleys do
     
     -- Fire all batteries
     for i, arty in ipairs(artillery) do
+        print(string.format("  Battery %d:", i))
+        
+        -- Log state before
+        logTurretState(arty, i, "BEFORE")
+        
+        -- Ensure turret is active
+        if not checkAndActivate(arty, i) then
+            goto continue
+        end
+        
+        -- Add target coordinates
+        log("Battery %d: Calling addCoords(%d, %d, %d)", i, x, y, z)
         local result = arty.addCoords(x, y, z)
+        log("Battery %d: addCoords returned: %s (type: %s)", i, tostring(result), type(result))
         
         -- Cannon returns boolean (in range check), rocket returns nil
         if result == false then
-            print(string.format("  Battery %d: OUT OF RANGE", i))
-        else
-            print(string.format("  Battery %d: FIRING", i))
+            print(string.format("    -> OUT OF RANGE"))
+            goto continue
         end
+        
+        -- Verify target was accepted
+        local hasTarget = arty.hasTarget()
+        log("Battery %d: hasTarget after addCoords = %s", i, tostring(hasTarget))
+        
+        if not hasTarget then
+            print(string.format("    -> TARGET NOT ACCEPTED!"))
+            goto continue
+        end
+        
+        -- Check current target
+        local currentTarget = {arty.getCurrentTarget()}
+        if #currentTarget >= 3 then
+            log("Battery %d: getCurrentTarget = %d, %d, %d", i, currentTarget[1], currentTarget[2], currentTarget[3])
+        else
+            log("Battery %d: getCurrentTarget returned incomplete data", i)
+        end
+        
+        -- Wait and check alignment
+        os.sleep(0.3)
+        logTurretState(arty, i, "AFTER")
+        
+        local aligned = arty.isAligned()
+        if aligned then
+            print(string.format("    -> FIRING (aligned)"))
+        else
+            print(string.format("    -> FIRING (aligning...)"))
+        end
+        
+        ::continue::
     end
     
     -- Delay between volleys

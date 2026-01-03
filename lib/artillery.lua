@@ -124,8 +124,42 @@ function artillery.setTarget(name, x, y, z)
         return false
     end
     
+    -- Ensure turret is active before targeting
+    local wasActive = battery.proxy.isActive()
+    core.debug("Battery '%s' active state before targeting: %s", name, tostring(wasActive))
+    
+    if not wasActive then
+        core.info("Activating battery '%s'...", name)
+        battery.proxy.setActive(true)
+        os.sleep(0.1) -- Brief delay for activation
+        
+        -- Verify activation
+        local nowActive = battery.proxy.isActive()
+        if not nowActive then
+            core.error("Failed to activate battery '%s'!", name)
+            return false
+        end
+        core.debug("Battery '%s' successfully activated", name)
+    end
+    
+    -- Check energy before firing
+    local energy = {battery.proxy.getEnergyInfo()}
+    core.debug("Battery '%s' energy: %d / %d", name, energy[1] or 0, energy[2] or 0)
+    if energy[1] and energy[1] <= 0 then
+        core.warn("Battery '%s' has no energy!", name)
+    end
+    
+    -- Log current angle before targeting
+    local angleBefore = {battery.proxy.getAngle()}
+    core.debug("Battery '%s' angle before targeting - pitch: %.2f, yaw: %.2f", 
+               name, angleBefore[1] or 0, angleBefore[2] or 0)
+    
+    -- Add target coordinates
+    core.info("Setting target for '%s': %d, %d, %d", name, x, y, z)
     local result = battery.proxy.addCoords(x, y, z)
     battery.lastTarget = {x = x, y = y, z = z}
+    
+    core.debug("addCoords returned: %s (type: %s)", tostring(result), type(result))
     
     -- Cannon returns boolean for range check, rocket returns nil
     if battery.type == "cannon" then
@@ -135,7 +169,34 @@ function artillery.setTarget(name, x, y, z)
         end
     end
     
-    core.debug("Target set for '%s': %d, %d, %d", name, x, y, z)
+    -- Verify target was accepted
+    local hasTarget = battery.proxy.hasTarget()
+    core.debug("Battery '%s' hasTarget after addCoords: %s", name, tostring(hasTarget))
+    
+    if not hasTarget then
+        core.warn("Battery '%s' did not accept target!", name)
+        return false
+    end
+    
+    -- Check current target
+    local currentTarget = {battery.proxy.getCurrentTarget()}
+    if #currentTarget >= 3 then
+        core.debug("Battery '%s' current target: %d, %d, %d", 
+                   name, currentTarget[1], currentTarget[2], currentTarget[3])
+    end
+    
+    -- Wait briefly and check alignment
+    os.sleep(0.2)
+    local aligned = battery.proxy.isAligned()
+    local angleAfter = {battery.proxy.getAngle()}
+    core.debug("Battery '%s' after targeting - aligned: %s, pitch: %.2f, yaw: %.2f", 
+               name, tostring(aligned), angleAfter[1] or 0, angleAfter[2] or 0)
+    
+    if not aligned then
+        core.info("Battery '%s' is aligning to target...", name)
+    end
+    
+    core.info("Target set for '%s': %d, %d, %d (aligned: %s)", name, x, y, z, tostring(aligned))
     return true
 end
 
