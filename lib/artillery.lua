@@ -188,32 +188,54 @@ function artillery.setTarget(name, x, y, z)
     end
     
     -- Check target distance (may be nil if no target)
-    local distanceOk, distance = pcall(battery.proxy.getTargetDistance)
-    if distanceOk and distance then
-        core.debug("Battery '%s' target distance: %.2f", name, distance)
-    else
-        core.debug("Battery '%s' target distance: N/A", name)
+    -- NOTE: getTargetDistance requires coordinates as args, not stored target
+    local turretPos = {battery.proxy.getPos and battery.proxy.getPos() or nil}
+    if turretPos[1] then
+        local dx = x - turretPos[1]
+        local dy = y - turretPos[2]
+        local dz = z - turretPos[3]
+        local distance = math.sqrt(dx*dx + dy*dy + dz*dz)
+        core.debug("Battery '%s' at position: %d, %d, %d", name, turretPos[1], turretPos[2], turretPos[3])
+        core.debug("Battery '%s' distance to target: %.2f blocks", name, distance)
+        
+        -- Artillery mode has 250 block MINIMUM range and 3000 max range
+        -- Cannon mode has 32 block minimum and 250 max range
+        if distance < 32 then
+            core.warn("Battery '%s' target may be TOO CLOSE! Distance %.0f < 32 block minimum (cannon mode)", name, distance)
+        elseif distance < 250 then
+            core.warn("Battery '%s' target may be TOO CLOSE for artillery mode! Distance %.0f < 250 block minimum", name, distance)
+            core.info("  Consider using cannon mode or moving target further away")
+        elseif distance > 3000 then
+            core.warn("Battery '%s' target is TOO FAR! Distance %.0f > 3000 block maximum", name, distance)
+        end
     end
     
     -- Verify target was accepted
+    -- NOTE: hasTarget() checks for entity targets, NOT manual coordinate targets!
+    -- In manual mode (which addCoords forces), hasTarget() will always be false.
+    -- We use getCurrentTarget() instead to verify the coordinates were queued.
     local hasTarget = battery.proxy.hasTarget()
-    core.debug("Battery '%s' hasTarget after addCoords: %s", name, tostring(hasTarget))
+    core.debug("Battery '%s' hasTarget after addCoords: %s (NOTE: always false in manual mode)", name, tostring(hasTarget))
     
     -- Even if hasTarget is false, let's check getCurrentTarget anyway
     local currentTarget = {battery.proxy.getCurrentTarget()}
+    local targetAccepted = false
     if #currentTarget >= 3 then
         core.debug("Battery '%s' getCurrentTarget: %d, %d, %d", 
                    name, currentTarget[1], currentTarget[2], currentTarget[3])
+        -- Verify the target matches what we sent
+        if math.abs(currentTarget[1] - x) < 1 and 
+           math.abs(currentTarget[2] - y) < 1 and 
+           math.abs(currentTarget[3] - z) < 1 then
+            targetAccepted = true
+            core.debug("Battery '%s' target coordinates confirmed in queue", name)
+        else
+            core.warn("Battery '%s' target mismatch! Expected %d,%d,%d but got %d,%d,%d",
+                     name, x, y, z, currentTarget[1], currentTarget[2], currentTarget[3])
+        end
     else
-        core.debug("Battery '%s' getCurrentTarget returned no data", name)
-    end
-    
-    if not hasTarget then
-        core.warn("Battery '%s' did not accept target! This may indicate:", name)
-        core.warn("  - No ammo loaded in turret")
-        core.warn("  - Target is out of range")
-        core.warn("  - Turret is obstructed")
-        -- Don't return false - let it continue so we can see more info
+        core.warn("Battery '%s' getCurrentTarget returned no data - target not accepted!", name)
+        core.warn("  Possible causes: No ammo, out of range, turret obstructed")
     end
     
     -- Wait briefly and check alignment
@@ -223,13 +245,13 @@ function artillery.setTarget(name, x, y, z)
     core.debug("Battery '%s' after targeting - aligned: %s, pitch: %.2f, yaw: %.2f", 
                name, tostring(aligned), angleAfter[1] or 0, angleAfter[2] or 0)
     
-    if not aligned then
+    if not aligned and targetAccepted then
         core.info("Battery '%s' is aligning to target...", name)
     end
     
-    core.info("Target set for '%s': %d, %d, %d (aligned: %s, hasTarget: %s)", 
-              name, x, y, z, tostring(aligned), tostring(hasTarget))
-    return hasTarget
+    core.info("Target set for '%s': %d, %d, %d (aligned: %s, accepted: %s)", 
+              name, x, y, z, tostring(aligned), tostring(targetAccepted))
+    return targetAccepted
 end
 
 --- Gets distance to current target
