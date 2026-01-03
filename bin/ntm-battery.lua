@@ -1,4 +1,3 @@
-#!/usr/bin/env lua
 --[[
     NTM Artillery Battery Node
     Runs on remote artillery installations, receives commands from command center

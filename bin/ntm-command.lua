@@ -1,4 +1,3 @@
-#!/usr/bin/env lua
 --[[
     NTM Command Center
     Main interface for the artillery command system

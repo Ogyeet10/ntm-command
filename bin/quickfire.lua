@@ -1,4 +1,3 @@
-#!/usr/bin/env lua
 --[[
     Quick Fire - Simple artillery script
     
