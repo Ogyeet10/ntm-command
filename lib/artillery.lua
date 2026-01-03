@@ -238,15 +238,52 @@ function artillery.setTarget(name, x, y, z)
         core.warn("  Possible causes: No ammo, out of range, turret obstructed")
     end
     
-    -- Wait briefly and check alignment
-    os.sleep(0.2)
-    local aligned = battery.proxy.isAligned()
+    -- Wait for turret to align and monitor pitch changes
+    -- The turret aligns over multiple server ticks, so we need to wait
+    core.info("Battery '%s' waiting for alignment...", name)
+    local maxWaitTicks = 60  -- 3 seconds at 20 TPS
+    local lastPitch = angleBefore[1] or 0
+    local lastYaw = angleBefore[2] or 0
+    local pitchChanged = false
+    
+    for i = 1, 6 do  -- Check every 0.5 seconds for 3 seconds
+        os.sleep(0.5)
+        local angleNow = {battery.proxy.getAngle()}
+        local currentPitch = angleNow[1] or 0
+        local currentYaw = angleNow[2] or 0
+        local aligned = battery.proxy.isAligned()
+        
+        core.debug("Battery '%s' tick %d - pitch: %.2f, yaw: %.2f, aligned: %s", 
+                   name, i, currentPitch, currentYaw, tostring(aligned))
+        
+        if math.abs(currentPitch - lastPitch) > 0.1 or math.abs(currentYaw - lastYaw) > 0.1 then
+            pitchChanged = true
+            core.debug("Battery '%s' turret is moving!", name)
+        end
+        
+        if aligned then
+            core.info("Battery '%s' aligned after %.1f seconds", name, i * 0.5)
+            break
+        end
+        
+        lastPitch = currentPitch
+        lastYaw = currentYaw
+    end
+    
     local angleAfter = {battery.proxy.getAngle()}
-    core.debug("Battery '%s' after targeting - aligned: %s, pitch: %.2f, yaw: %.2f", 
+    local aligned = battery.proxy.isAligned()
+    core.debug("Battery '%s' final state - aligned: %s, pitch: %.2f, yaw: %.2f", 
                name, tostring(aligned), angleAfter[1] or 0, angleAfter[2] or 0)
     
+    if not pitchChanged then
+        core.error("Battery '%s' pitch/yaw DID NOT CHANGE! Possible causes:", name)
+        core.error("  - Target too close (min 250 blocks for artillery mode)")
+        core.error("  - Ballistic calculation failed (NaN)")
+        core.error("  - Turret not processing (check isOn and power in-game)")
+    end
+    
     if not aligned and targetAccepted then
-        core.info("Battery '%s' is aligning to target...", name)
+        core.warn("Battery '%s' failed to align after 3 seconds", name)
     end
     
     core.info("Target set for '%s': %d, %d, %d (aligned: %s, accepted: %s)", 
