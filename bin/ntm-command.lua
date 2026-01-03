@@ -27,6 +27,9 @@ local network = require("lib.network")
 -- INITIALIZATION
 -- ============================================================================
 
+-- Enable debug logging by default for troubleshooting
+core.setLogLevel(core.LOG_LEVELS.DEBUG)
+
 local function init()
     core.info("NTM Command Center initializing...")
     
@@ -99,6 +102,7 @@ SYSTEM:
   status            - Show full system status
   reload            - Rescan all components
   config            - Configuration menu
+  debug             - Toggle debug logging on/off
   exit              - Exit command center
 ]])
 end
@@ -295,6 +299,20 @@ function commands.reload()
     local artCount = artillery.scanBatteries()
     local radarCount = radar.scanRadars()
     print(string.format("Found: %d batteries, %d radars", artCount, radarCount))
+end
+
+-- Track debug state
+local debugEnabled = true
+
+function commands.debug()
+    debugEnabled = not debugEnabled
+    if debugEnabled then
+        core.setLogLevel(core.LOG_LEVELS.DEBUG)
+        print("Debug logging ENABLED")
+    else
+        core.setLogLevel(core.LOG_LEVELS.INFO)
+        print("Debug logging DISABLED")
+    end
 end
 
 function commands.config()
