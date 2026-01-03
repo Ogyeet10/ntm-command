@@ -1,0 +1,400 @@
+--[[
+    NTM Command Framework - Artillery Module
+    Controls and coordinates artillery batteries (rocket and cannon)
+    
+    Supports:
+    - Individual battery control
+    - Coordinated volleys across multiple batteries
+    - Target queue management
+    - Range validation (cannon only)
+]]
+
+local component = require("component")
+local event = require("event")
+local core = require("lib.core")
+
+local artillery = {}
+
+-- ============================================================================
+-- BATTERY REGISTRY
+-- ============================================================================
+
+-- Stores all known artillery batteries
+-- Format: batteries[name] = {proxy, type, position, status}
+artillery.batteries = {}
+
+--- Scans for and registers all artillery components
+function artillery.scanBatteries()
+    artillery.batteries = {}
+    
+    -- Find all artillery components
+    local found = core.findComponents("ntm_artillery")
+    
+    for i, comp in ipairs(found) do
+        local name = "battery_" .. i
+        local proxy = comp.proxy
+        
+        -- Determine type by checking if addCoords returns boolean (cannon) or nil (rocket)
+        -- We'll default to "unknown" and let the user configure
+        artillery.batteries[name] = {
+            proxy = proxy,
+            address = comp.address,
+            type = "unknown", -- "rocket" or "cannon"
+            enabled = true,
+            lastTarget = nil
+        }
+        
+        core.info("Registered artillery: %s @ %s", name, comp.address:sub(1,8))
+    end
+    
+    return #found
+end
+
+--- Manually registers a battery with a custom name
+function artillery.registerBattery(name, address, batteryType)
+    local proxy = component.proxy(address)
+    if not proxy then
+        core.error("Cannot find component: %s", address)
+        return false
+    end
+    
+    artillery.batteries[name] = {
+        proxy = proxy,
+        address = address,
+        type = batteryType or "unknown",
+        enabled = true,
+        lastTarget = nil
+    }
+    
+    core.info("Registered battery '%s' as %s", name, batteryType or "unknown")
+    return true
+end
+
+--- Sets battery type (rocket/cannon)
+function artillery.setBatteryType(name, batteryType)
+    if not artillery.batteries[name] then
+        core.error("Unknown battery: %s", name)
+        return false
+    end
+    artillery.batteries[name].type = batteryType
+    return true
+end
+
+--- Enables/disables a battery
+function artillery.setBatteryEnabled(name, enabled)
+    if not artillery.batteries[name] then
+        core.error("Unknown battery: %s", name)
+        return false
+    end
+    artillery.batteries[name].enabled = enabled
+    return true
+end
+
+-- ============================================================================
+-- TARGETING
+-- ============================================================================
+
+--- Gets current target of a battery
+function artillery.getCurrentTarget(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    
+    local target = {battery.proxy.getCurrentTarget()}
+    if #target >= 3 then
+        return {x = target[1], y = target[2], z = target[3]}
+    end
+    return nil
+end
+
+--- Sets target for a specific battery
+-- @param name string: Battery name
+-- @param x number: Target X coordinate
+-- @param y number: Target Y coordinate  
+-- @param z number: Target Z coordinate
+-- @return boolean: Success status (for cannon, indicates if in range)
+function artillery.setTarget(name, x, y, z)
+    local battery = artillery.batteries[name]
+    if not battery then
+        core.error("Unknown battery: %s", name)
+        return false
+    end
+    
+    if not battery.enabled then
+        core.warn("Battery '%s' is disabled", name)
+        return false
+    end
+    
+    local result = battery.proxy.addCoords(x, y, z)
+    battery.lastTarget = {x = x, y = y, z = z}
+    
+    -- Cannon returns boolean for range check, rocket returns nil
+    if battery.type == "cannon" then
+        if result == false then
+            core.warn("Target out of range for cannon '%s'", name)
+            return false
+        end
+    end
+    
+    core.debug("Target set for '%s': %d, %d, %d", name, x, y, z)
+    return true
+end
+
+--- Gets distance to current target
+function artillery.getTargetDistance(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    return battery.proxy.getTargetDistance()
+end
+
+-- ============================================================================
+-- TURRET CONTROLS (inherited from base turret API)
+-- ============================================================================
+
+--- Activates/deactivates a battery's turret
+function artillery.setActive(name, active)
+    local battery = artillery.batteries[name]
+    if not battery then return false end
+    battery.proxy.setActive(active)
+    return true
+end
+
+--- Checks if battery is active
+function artillery.isActive(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    return battery.proxy.isActive()
+end
+
+--- Gets battery energy info
+function artillery.getEnergy(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    local info = {battery.proxy.getEnergyInfo()}
+    return {current = info[1], max = info[2]}
+end
+
+--- Gets battery angle (pitch/yaw)
+function artillery.getAngle(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    local angle = {battery.proxy.getAngle()}
+    return {pitch = angle[1], yaw = angle[2]}
+end
+
+--- Checks if battery is aligned with target
+function artillery.isAligned(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    return battery.proxy.isAligned()
+end
+
+--- Checks if battery has a target
+function artillery.hasTarget(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    return battery.proxy.hasTarget()
+end
+
+--- Gets/modifies whitelist
+function artillery.getWhitelist(name)
+    local battery = artillery.batteries[name]
+    if not battery then return nil end
+    return battery.proxy.getWhitelist()
+end
+
+function artillery.removeFromWhitelist(name, player)
+    local battery = artillery.batteries[name]
+    if not battery then return false end
+    return battery.proxy.removeWhiteList(player)
+end
+
+--- Sets targeting preferences
+function artillery.setTargeting(name, players, animals, mobs, machines)
+    local battery = artillery.batteries[name]
+    if not battery then return false end
+    battery.proxy.setTargeting(players, animals, mobs, machines)
+    return true
+end
+
+-- ============================================================================
+-- VOLLEY FIRE SYSTEM
+-- ============================================================================
+
+--- Fires a coordinated volley at a single target from multiple batteries
+-- @param target table: {x, y, z} coordinates
+-- @param batteryNames table|nil: Specific batteries to use (nil = all enabled)
+-- @param delay number: Delay between shots in seconds (default 0)
+-- @return table: Results for each battery
+function artillery.fireVolley(target, batteryNames, delay)
+    delay = delay or 0
+    local results = {}
+    
+    -- Get list of batteries to use
+    local batteries = {}
+    if batteryNames then
+        for _, name in ipairs(batteryNames) do
+            if artillery.batteries[name] then
+                table.insert(batteries, name)
+            end
+        end
+    else
+        for name, battery in pairs(artillery.batteries) do
+            if battery.enabled then
+                table.insert(batteries, name)
+            end
+        end
+    end
+    
+    core.info("Firing volley at %d, %d, %d with %d batteries", 
+              target.x, target.y, target.z, #batteries)
+    
+    for i, name in ipairs(batteries) do
+        local success = artillery.setTarget(name, target.x, target.y, target.z)
+        results[name] = success
+        
+        if success then
+            core.debug("Battery '%s' targeted", name)
+        else
+            core.warn("Battery '%s' failed to target", name)
+        end
+        
+        -- Delay between shots if specified
+        if delay > 0 and i < #batteries then
+            os.sleep(delay)
+        end
+    end
+    
+    return results
+end
+
+--- Fires multiple volleys at the same target
+-- @param target table: {x, y, z} coordinates
+-- @param volleys number: Number of volleys to fire
+-- @param volleyDelay number: Delay between volleys in seconds
+-- @param shotDelay number: Delay between shots within a volley
+function artillery.fireVolleyBurst(target, volleys, volleyDelay, shotDelay)
+    volleyDelay = volleyDelay or 2
+    shotDelay = shotDelay or 0
+    
+    core.info("Firing %d volleys at target", volleys)
+    
+    for v = 1, volleys do
+        core.info("Volley %d/%d", v, volleys)
+        artillery.fireVolley(target, nil, shotDelay)
+        
+        if v < volleys then
+            os.sleep(volleyDelay)
+        end
+    end
+    
+    core.info("Volley burst complete")
+end
+
+--- Fire at multiple targets in sequence (walking fire)
+-- @param targets table: Array of {x, y, z} coordinates
+-- @param delay number: Delay between targets
+function artillery.walkingFire(targets, delay)
+    delay = delay or 1
+    
+    core.info("Walking fire across %d targets", #targets)
+    
+    for i, target in ipairs(targets) do
+        core.info("Target %d/%d: %d, %d, %d", i, #targets, target.x, target.y, target.z)
+        artillery.fireVolley(target)
+        
+        if i < #targets then
+            os.sleep(delay)
+        end
+    end
+    
+    core.info("Walking fire complete")
+end
+
+-- ============================================================================
+-- STATUS & REPORTING
+-- ============================================================================
+
+--- Gets comprehensive status of all batteries
+function artillery.getStatus()
+    local status = {
+        total = 0,
+        enabled = 0,
+        active = 0,
+        batteries = {}
+    }
+    
+    for name, battery in pairs(artillery.batteries) do
+        status.total = status.total + 1
+        
+        local batteryStatus = {
+            name = name,
+            address = battery.address:sub(1, 8),
+            type = battery.type,
+            enabled = battery.enabled,
+            active = battery.proxy.isActive(),
+            hasTarget = battery.proxy.hasTarget(),
+            aligned = battery.proxy.isAligned(),
+            energy = artillery.getEnergy(name),
+            lastTarget = battery.lastTarget
+        }
+        
+        if battery.enabled then status.enabled = status.enabled + 1 end
+        if batteryStatus.active then status.active = status.active + 1 end
+        
+        status.batteries[name] = batteryStatus
+    end
+    
+    return status
+end
+
+--- Prints a formatted status report
+function artillery.printStatus()
+    local status = artillery.getStatus()
+    
+    print("=== Artillery Status ===")
+    print(string.format("Batteries: %d total, %d enabled, %d active",
+          status.total, status.enabled, status.active))
+    print("")
+    
+    for name, info in pairs(status.batteries) do
+        local state = info.enabled and "ON" or "OFF"
+        local targetStr = info.hasTarget and "TARGETED" or "NO TARGET"
+        local energyPct = info.energy and math.floor(info.energy.current / info.energy.max * 100) or 0
+        
+        print(string.format("[%s] %s (%s) - %s - Energy: %d%%",
+              state, name, info.type, targetStr, energyPct))
+    end
+end
+
+-- ============================================================================
+-- PERSISTENCE
+-- ============================================================================
+
+--- Saves battery configuration to file
+function artillery.saveConfig(path)
+    local config = {}
+    
+    for name, battery in pairs(artillery.batteries) do
+        config[name] = {
+            address = battery.address,
+            type = battery.type,
+            enabled = battery.enabled
+        }
+    end
+    
+    return core.saveConfig(path or "/etc/ntm/artillery.cfg", config)
+end
+
+--- Loads battery configuration from file
+function artillery.loadConfig(path)
+    local config = core.loadConfig(path or "/etc/ntm/artillery.cfg")
+    
+    for name, data in pairs(config) do
+        artillery.registerBattery(name, data.address, data.type)
+        artillery.setBatteryEnabled(name, data.enabled)
+    end
+    
+    return true
+end
+
+return artillery
