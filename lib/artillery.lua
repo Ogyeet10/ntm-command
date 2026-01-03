@@ -175,9 +175,25 @@ function artillery.setTarget(name, x, y, z)
                name, tostring(targeting[1]), tostring(targeting[2]), 
                tostring(targeting[3]), tostring(targeting[4]))
     
-    -- Check target distance
-    local distance = battery.proxy.getTargetDistance()
-    core.debug("Battery '%s' target distance: %s", name, tostring(distance))
+    -- Warn if all targeting is disabled
+    if not targeting[1] and not targeting[2] and not targeting[3] and not targeting[4] then
+        core.warn("Battery '%s' has ALL targeting disabled! Enabling players targeting...", name)
+        battery.proxy.setTargeting(true, false, false, false)
+        
+        -- Verify it was set
+        local newTargeting = {battery.proxy.getTargeting()}
+        core.debug("Battery '%s' new targeting settings - players: %s, animals: %s, mobs: %s, machines: %s",
+                   name, tostring(newTargeting[1]), tostring(newTargeting[2]), 
+                   tostring(newTargeting[3]), tostring(newTargeting[4]))
+    end
+    
+    -- Check target distance (may be nil if no target)
+    local distanceOk, distance = pcall(battery.proxy.getTargetDistance)
+    if distanceOk and distance then
+        core.debug("Battery '%s' target distance: %.2f", name, distance)
+    else
+        core.debug("Battery '%s' target distance: N/A", name)
+    end
     
     -- Verify target was accepted
     local hasTarget = battery.proxy.hasTarget()
